@@ -1,7 +1,8 @@
 ## Interface: 120007
 ## Title: ShiftClickTargetFix
-## Notes: Restores Shift+Left-Click targeting on unit frames and friendly nameplates (Midnight 12.0.7)
-## Version: 5.0.0
+## SavedVariables: ShiftClickTargetFixDB
+## Notes: Restores Shift/Ctrl/Alt + Left-Click targeting on unit frames and friendly nameplates (The War Within 12.0.7+). Per-modifier toggles in /shiftfix settings.
+## Version: 5.1.0
 ## Author: ccars
 
 ShiftClickTargetFix.lua

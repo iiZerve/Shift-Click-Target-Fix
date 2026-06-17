@@ -2,7 +2,8 @@
   ShiftClickTargetFix
 
   12.0.7 blocks modified SecureUnitButton clicks that resolve to "target".
-  Route Shift+Left through the ungated "click" action to a SecureActionButton
+  Route Shift/Ctrl/Alt + Left through the ungated "click" action to a SecureActionButton proxy.
+  Now supports per-modifier toggles via /shiftfix settings.
 
 ]]
 
@@ -13,6 +14,23 @@ local attachedFrames = {}
 local pendingApply = false
 local lastAppliedCount = 0
 
+local db
+local defaults = { shift = true, ctrl = true, alt = true }
+
+local function LoadDB()
+    if not ShiftClickTargetFixDB then
+        ShiftClickTargetFixDB = {}
+    end
+    db = ShiftClickTargetFixDB
+    for k, v in pairs(defaults) do
+        if db[k] == nil then
+            db[k] = v
+        end
+    end
+end
+
+LoadDB()
+
 local function SafeTrim(s)
     if strtrim then
         return strtrim(s or "")
@@ -21,7 +39,7 @@ local function SafeTrim(s)
 end
 
 local function IsSecureUnitButton(frame)
-    if not frame or frame.IsForbidden and frame:IsForbidden() then
+    if not frame or (frame.IsForbidden and frame:IsForbidden()) then
         return false
     end
     if not frame.SetAttribute or not frame.GetAttribute then
@@ -58,18 +76,22 @@ local function GetTargetProxy(frame)
     return proxy
 end
 
-local function ShouldAttach(frame)
-    if not IsSecureUnitButton(frame) or attachedFrames[frame] then
+local function ShouldAttachForModifier(frame, mod)
+    if not IsSecureUnitButton(frame) then
         return false
     end
 
-    local shiftType = frame:GetAttribute("*shift-type1") or frame:GetAttribute("shift-type1")
-    if shiftType and shiftType ~= "target" and shiftType ~= "click" then
+    local typeKey = mod .. "-type1"
+    local starTypeKey = "*" .. mod .. "-type1"
+    local currentType = frame:GetAttribute(starTypeKey) or frame:GetAttribute(typeKey)
+    if currentType and currentType ~= "target" and currentType ~= "click" then
         return false
     end
 
     local proxy = targetProxies[frame]
-    local clickBtn = frame:GetAttribute("*shift-clickbutton1") or frame:GetAttribute("shift-clickbutton1")
+    local clickKey = mod .. "-clickbutton1"
+    local starClickKey = "*" .. mod .. "-clickbutton1"
+    local clickBtn = frame:GetAttribute(starClickKey) or frame:GetAttribute(clickKey)
     if proxy and clickBtn == proxy then
         return false
     end
@@ -77,27 +99,44 @@ local function ShouldAttach(frame)
     return true
 end
 
-local function AttachShiftTarget(frame)
-    if not ShouldAttach(frame) then
+local function AttachTargetFix(frame)
+    if attachedFrames[frame] then
+        return false
+    end
+    if not IsSecureUnitButton(frame) then
         return false
     end
 
-    local ok, err = pcall(function()
-        local proxy = GetTargetProxy(frame)
-        frame:SetAttribute("shift-type1", nil)
-        frame:SetAttribute("shift-type1", "click")
-        frame:SetAttribute("shift-clickbutton1", proxy)
-        frame:SetAttribute("*shift-type1", "click")
-        frame:SetAttribute("*shift-clickbutton1", proxy)
-    end)
+    local proxy = GetTargetProxy(frame)
+    local attachedAny = false
 
-    if not ok then
-        return false
+    for _, mod in ipairs({"shift", "ctrl", "alt"}) do
+        if db[mod] and ShouldAttachForModifier(frame, mod) then
+            local typeKey = mod .. "-type1"
+            local starTypeKey = "*" .. mod .. "-type1"
+            local clickKey = mod .. "-clickbutton1"
+            local starClickKey = "*" .. mod .. "-clickbutton1"
+
+            local ok = pcall(function()
+                frame:SetAttribute(typeKey, nil)
+                frame:SetAttribute(typeKey, "click")
+                frame:SetAttribute(clickKey, proxy)
+                frame:SetAttribute(starTypeKey, "click")
+                frame:SetAttribute(starClickKey, proxy)
+            end)
+
+            if ok then
+                attachedAny = true
+            end
+        end
     end
 
-    attachedFrames[frame] = true
-    lastAppliedCount = lastAppliedCount + 1
-    return true
+    if attachedAny then
+        attachedFrames[frame] = true
+        lastAppliedCount = lastAppliedCount + 1
+        return true
+    end
+    return false
 end
 
 local function WalkChildren(frame, depth)
@@ -105,7 +144,7 @@ local function WalkChildren(frame, depth)
         return
     end
     for _, child in ipairs({ frame:GetChildren() }) do
-        AttachShiftTarget(child)
+        AttachTargetFix(child)
         WalkChildren(child, depth + 1)
     end
 end
@@ -113,7 +152,7 @@ end
 local function TryGlobal(name)
     local frame = _G[name]
     if frame then
-        AttachShiftTarget(frame)
+        AttachTargetFix(frame)
         WalkChildren(frame, 0)
     end
 end
@@ -128,7 +167,7 @@ local function ApplyPartyFrames()
         for i = 1, 5 do
             local member = party["MemberFrame" .. i]
             if member then
-                AttachShiftTarget(member)
+                AttachTargetFix(member)
                 WalkChildren(member, 0)
             end
         end
@@ -178,7 +217,7 @@ local function ApplyToClickCastFrames()
         return
     end
     for frame in pairs(ClickCastFrames) do
-        AttachShiftTarget(frame)
+        AttachTargetFix(frame)
     end
 end
 
@@ -189,7 +228,7 @@ local function ApplyToNameplates()
     for _, nameplate in ipairs(C_NamePlate.GetNamePlates()) do
         WalkChildren(nameplate, 0)
         if nameplate.UnitFrame then
-            AttachShiftTarget(nameplate.UnitFrame)
+            AttachTargetFix(nameplate.UnitFrame)
             WalkChildren(nameplate.UnitFrame, 0)
         end
     end
@@ -212,7 +251,7 @@ local function ApplyAll()
 end
 
 -------------------------------------------------------------------------------
--- Click Casting profile fallback
+-- Click Casting profile fallback (Shift only, as before)
 -------------------------------------------------------------------------------
 
 local function ModifierLabel(mod)
@@ -290,7 +329,7 @@ local function EnsureClickCastingBinding()
 end
 
 -------------------------------------------------------------------------------
--- BetterBlizzPlates friendly clickthrough
+-- BetterBlizzPlates friendly clickthrough (now any modifier)
 -------------------------------------------------------------------------------
 
 local friendlyInsetsCollapsed = false
@@ -321,7 +360,8 @@ local function UpdateFriendlyNameplateHitTest()
         return
     end
 
-    if IsShiftKeyDown() then
+    local anyModifierDown = IsShiftKeyDown() or IsControlKeyDown() or IsAltKeyDown()
+    if anyModifierDown then
         if not friendlyInsetsCollapsed then
             return
         end
@@ -365,7 +405,7 @@ local function RunFix(silent)
     end
 
     if FriendlyClickthroughEnabled() then
-        print("|cff00ff00[" .. ADDON .. "]|r Friendly nameplate clickthrough: hold Shift to click nameplates.")
+        print("|cff00ff00[" .. ADDON .. "]|r Friendly nameplate clickthrough: hold Shift/Ctrl/Alt to click nameplates.")
     end
 
     return proxyOk, bindOk, bindReason, lastAppliedCount
@@ -413,7 +453,7 @@ end)
 if CompactUnitFrame_SetUpFrame then
     hooksecurefunc("CompactUnitFrame_SetUpFrame", function(frame)
         if not InCombatLockdown() then
-            AttachShiftTarget(frame)
+            AttachTargetFix(frame)
         else
             pendingApply = true
         end
@@ -434,7 +474,7 @@ do
                     rawset(old, frame, value)
                 end
                 if value and not InCombatLockdown() then
-                    AttachShiftTarget(frame)
+                    AttachTargetFix(frame)
                 end
             end,
             __index = function(_, frame)
@@ -451,7 +491,7 @@ do
         })
         for frame, val in pairs(old) do
             if val then
-                AttachShiftTarget(frame)
+                AttachTargetFix(frame)
             end
         end
     end
@@ -462,7 +502,7 @@ do
 end
 
 -------------------------------------------------------------------------------
--- Slash
+-- Debug
 -------------------------------------------------------------------------------
 
 local function DebugDump()
@@ -489,17 +529,120 @@ local function DebugDump()
     end
 end
 
+-------------------------------------------------------------------------------
+-- Settings UI + Apply logic
+-------------------------------------------------------------------------------
+
+local configFrame
+
+local function ApplySettings()
+    if InCombatLockdown() then
+        pendingApply = true
+        print("|cffff9900[" .. ADDON .. "]|r Combat lockdown - settings will apply when combat ends.")
+        return
+    end
+
+    for frame in pairs(attachedFrames) do
+        for _, mod in ipairs({"shift", "ctrl", "alt"}) do
+            if not db[mod] then
+                pcall(function()
+                    frame:SetAttribute(mod .. "-type1", nil)
+                    frame:SetAttribute("*" .. mod .. "-type1", nil)
+                    frame:SetAttribute(mod .. "-clickbutton1", nil)
+                    frame:SetAttribute("*" .. mod .. "-clickbutton1", nil)
+                end)
+            end
+        end
+    end
+
+    attachedFrames = {}
+    ApplyAll()
+end
+
+local function CreateSettingsFrame()
+    if configFrame then
+        configFrame:Show()
+        return
+    end
+
+    configFrame = CreateFrame("Frame", "ShiftClickTargetFixConfig", UIParent, "BasicFrameTemplateWithInset")
+    configFrame:SetSize(340, 250)
+    configFrame:SetPoint("CENTER")
+    configFrame:SetMovable(true)
+    configFrame:EnableMouse(true)
+    configFrame:RegisterForDrag("LeftButton")
+    configFrame:SetScript("OnDragStart", configFrame.StartMoving)
+    configFrame:SetScript("OnDragStop", configFrame.StopMovingOrSizing)
+    configFrame:SetClampedToScreen(true)
+
+    configFrame.title = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    configFrame.title:SetPoint("TOP", 0, -25)  -- moved up ~15px for better padding
+    configFrame.title:SetText("ShiftClickTargetFix Settings")
+
+    local y = -50
+    local function AddModifierToggle(mod, label, yOffset)
+        local cb = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", 25, yOffset)
+        cb.Text:SetText(label)
+        cb:SetChecked(db and db[mod])
+        cb:SetScript("OnClick", function(self)
+            if db then db[mod] = self:GetChecked() end
+            ApplySettings()
+        end)
+        cb:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Toggle " .. label, 1, 1, 1)
+            GameTooltip:AddLine("Hold the modifier + Left Click on unit frames or friendly nameplates to target.", 0.8, 0.8, 0.8, true)
+            GameTooltip:Show()
+        end)
+        cb:SetScript("OnLeave", GameTooltip_Hide)
+        return cb
+    end
+
+    AddModifierToggle("shift", "Enable Shift + Left-Click targeting", y)
+    y = y - 28
+    AddModifierToggle("ctrl", "Enable Ctrl + Left-Click targeting", y)
+    y = y - 28
+    AddModifierToggle("alt", "Enable Alt + Left-Click targeting", y)
+
+    local info = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    info:SetPoint("TOPLEFT", 25, y - 20)
+    info:SetWidth(290)
+    info:SetText("Settings are saved automatically on /reload or logout.\nToggles take effect immediately (outside combat).")
+    info:SetJustifyH("LEFT")
+    info:SetTextColor(0.7, 0.7, 0.7)
+
+    local saveBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
+    saveBtn:SetSize(140, 26)
+    saveBtn:SetPoint("BOTTOM", 0, 18)
+    saveBtn:SetText("Save Settings")
+    saveBtn:SetScript("OnClick", function()
+        if not InCombatLockdown() then
+            attachedFrames = {}
+            ApplyAll()
+            print("|cff00ff00[" .. ADDON .. "]|r Settings saved & frames re-scanned.")
+        else
+            print("|cffff9900[" .. ADDON .. "]|r Cannot apply during combat.")
+        end
+    end)
+
+    local ver = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ver:SetPoint("BOTTOMRIGHT", -10, 6)
+    ver:SetText("v5.1.0")
+    ver:SetTextColor(0.5, 0.5, 0.5)
+end
+
 SLASH_SHIFTCLICKTARGETFIX1 = "/shiftfix"
 SLASH_SHIFTCLICKTARGETFIX2 = "/shiftclicktargetfix"
 SlashCmdList["SHIFTCLICKTARGETFIX"] = function(msg)
     msg = SafeTrim(msg):lower()
-    print("|cff00ff00[" .. ADDON .. "]|r Running...")
-    C_Timer.After(0, function()
-        if msg == "debug" then
-            RunFix(true)
-            DebugDump()
-        else
-            RunFix(false)
-        end
-    end)
+    if msg == "debug" then
+        RunFix(true)
+        DebugDump()
+    elseif msg == "apply" then
+        print("|cff00ff00[" .. ADDON .. "]|r Applying fix...")
+        C_Timer.After(0, function() RunFix(false) end)
+    else
+        CreateSettingsFrame()
+    end
 end
